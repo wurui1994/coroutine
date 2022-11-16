@@ -7,7 +7,8 @@
 #include <stdint.h>
 
 #if __APPLE__ && __MACH__
-	#include <sys/ucontext.h>
+	#define _XOPEN_SOURCE
+	#include <ucontext.h>
 #else 
 	#include <ucontext.h>
 #endif 

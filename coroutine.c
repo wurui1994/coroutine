@@ -9,6 +9,8 @@
 #if __APPLE__ && __MACH__
 	#define _XOPEN_SOURCE
 	#include <ucontext.h>
+#elif defined(_WIN32)
+	#include <windows.h>
 #else 
 	#include <ucontext.h>
 #endif 
@@ -20,7 +22,11 @@ struct coroutine;
 
 struct schedule {
 	char stack[STACK_SIZE];
+#if defined(_WIN32)
+	LPVOID main;
+#else
 	ucontext_t main;
+#endif
 	int nco;
 	int cap;
 	int running;
@@ -30,7 +36,11 @@ struct schedule {
 struct coroutine {
 	coroutine_func func;
 	void *ud;
+#if defined(_WIN32)
+	LPVOID ctx;
+#else
 	ucontext_t ctx;
+#endif
 	struct schedule * sch;
 	ptrdiff_t cap;
 	ptrdiff_t size;
@@ -65,6 +75,11 @@ coroutine_open(void) {
 	S->running = -1;
 	S->co = malloc(sizeof(struct coroutine *) * S->cap);
 	memset(S->co, 0, sizeof(struct coroutine *) * S->cap);
+#if defined(_WIN32)
+	S->main = ConvertThreadToFiber(NULL);
+#else
+	getcontext(&S->main);
+#endif
 	return S;
 }
 
@@ -131,6 +146,12 @@ coroutine_resume(struct schedule * S, int id) {
 	int status = C->status;
 	switch(status) {
 	case COROUTINE_READY:
+#if defined(_WIN32)
+		C->ctx = CreateFiber(STACK_SIZE, (LPFIBER_START_ROUTINE)mainfunc, (LPVOID)S);
+		S->running = id;
+		C->status = COROUTINE_RUNNING;
+		SwitchToFiber(C->ctx);
+#else
 		getcontext(&C->ctx);
 		C->ctx.uc_stack.ss_sp = S->stack;
 		C->ctx.uc_stack.ss_size = STACK_SIZE;
@@ -140,12 +161,20 @@ coroutine_resume(struct schedule * S, int id) {
 		uintptr_t ptr = (uintptr_t)S;
 		makecontext(&C->ctx, (void (*)(void)) mainfunc, 2, (uint32_t)ptr, (uint32_t)(ptr>>32));
 		swapcontext(&S->main, &C->ctx);
+#endif
 		break;
 	case COROUTINE_SUSPEND:
+#if defined(_WIN32)
+		memcpy(S->stack + STACK_SIZE - C->size, C->stack, C->size);
+		S->running = id;
+		C->status = COROUTINE_RUNNING;
+		SwitchToFiber(C->ctx);
+#else
 		memcpy(S->stack + STACK_SIZE - C->size, C->stack, C->size);
 		S->running = id;
 		C->status = COROUTINE_RUNNING;
 		swapcontext(&S->main, &C->ctx);
+#endif
 		break;
 	default:
 		assert(0);
@@ -174,7 +203,11 @@ coroutine_yield(struct schedule * S) {
 	_save_stack(C,S->stack + STACK_SIZE);
 	C->status = COROUTINE_SUSPEND;
 	S->running = -1;
+#if defined(_WIN32)
+	SwitchToFiber(S->main);
+#else
 	swapcontext(&C->ctx , &S->main);
+#endif
 }
 
 int 
